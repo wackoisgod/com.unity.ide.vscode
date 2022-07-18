@@ -10,6 +10,7 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
 using UnityEngine.Profiling;
+using System.Xml.Linq;
 
 namespace VSCodeEditor
 {
@@ -144,7 +145,7 @@ namespace VSCodeEditor
         const string k_ToolsVersion = "4.0";
         const string k_ProductVersion = "10.0.20506";
         const string k_BaseDirectory = ".";
-        const string k_TargetFrameworkVersion = "v4.7.1";
+        const string k_TargetFrameworkVersion = "net471";
         public ProjectGeneration(string tempDirectory)
             : this(tempDirectory, new AssemblyNameProvider(), new FileIOProvider(), new GUIDProvider()) { }
 
@@ -375,9 +376,9 @@ namespace VSCodeEditor
             return responseFilesData.Select(x => x.Value).ToList();
         }
 
-        Dictionary<string, string> GenerateAllAssetProjectParts()
+        Dictionary<string, XElement> GenerateAllAssetProjectParts()
         {
-            Dictionary<string, StringBuilder> stringBuilders = new Dictionary<string, StringBuilder>();
+            Dictionary<string, XElement> stringBuilders = new Dictionary<string, XElement>();
 
             foreach (string asset in m_AssemblyNameProvider.GetAllAssetPaths())
             {
@@ -403,25 +404,25 @@ namespace VSCodeEditor
 
                     if (!stringBuilders.TryGetValue(assemblyName, out var projectBuilder))
                     {
-                        projectBuilder = new StringBuilder();
+                        projectBuilder = new XElement("None");
                         stringBuilders[assemblyName] = projectBuilder;
                     }
-
-                    projectBuilder.Append("     <None Include=\"").Append(m_FileIOProvider.EscapedRelativePathFor(asset, ProjectDirectory)).Append("\" />").Append(k_WindowsNewline);
+                    projectBuilder.SetAttributeValue("Include", m_FileIOProvider.EscapedRelativePathFor(asset, ProjectDirectory));
+                    //projectBuilder.Append("     <None Include=\"").Append(m_FileIOProvider.EscapedRelativePathFor(asset, ProjectDirectory)).Append("\" />").Append(k_WindowsNewline);
                 }
             }
 
-            var result = new Dictionary<string, string>();
+            var result = new Dictionary<string, XElement>();
 
             foreach (var entry in stringBuilders)
-                result[entry.Key] = entry.Value.ToString();
+                result[entry.Key] = entry.Value;
 
             return result;
         }
 
         void SyncProject(
             Assembly assembly,
-            Dictionary<string, string> allAssetsProjectParts,
+            Dictionary<string, XElement> allAssetsProjectParts,
             List<ResponseFileData> responseFilesData)
         {
             SyncProjectFileIfNotChanged(ProjectFile(assembly), ProjectText(assembly, allAssetsProjectParts, responseFilesData));
@@ -461,64 +462,144 @@ namespace VSCodeEditor
             m_FileIOProvider.WriteAllText(filename, newContents);
         }
 
+        private const string SDKStyleCsProj = @"
+<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <DisableImplicitNamespaceImports>true</DisableImplicitNamespaceImports>
+  </PropertyGroup>
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Library/;**/*.*</DefaultItemExcludes>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+</Project>
+";
+
+
         string ProjectText(
             Assembly assembly,
-            Dictionary<string, string> allAssetsProjectParts,
+            Dictionary<string, XElement> allAssetsProjectParts,
             List<ResponseFileData> responseFilesData)
         {
-            var projectBuilder = new StringBuilder();
-            ProjectHeader(assembly, responseFilesData, projectBuilder);
-            var references = new List<string>();
+            // We parse the sdk style project into an XML Document we can then add to :D
+            var document = XDocument.Parse(SDKStyleCsProj);
+            var project = document.Element("Project");
+            var targetFrameWork = project.Elements().First().Element("TargetFramework");
 
-            foreach (string file in assembly.sourceFiles)
+            var group = BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget);
+            var netSettings = PlayerSettings.GetApiCompatibilityLevel(group);
+            
+            switch (netSettings)
             {
-                var fullFile = m_FileIOProvider.EscapedRelativePathFor(file, ProjectDirectory);
-                projectBuilder.Append("     <Compile Include=\"").Append(fullFile).Append("\" />").Append(k_WindowsNewline);
+                case ApiCompatibilityLevel.NET_2_0:
+                case ApiCompatibilityLevel.NET_2_0_Subset:
+#if !UNITY_2021_1_OR_NEWER
+                case ApiCompatibilityLevel.NET_4_6:
+#endif
+                case ApiCompatibilityLevel.NET_Web:
+                case ApiCompatibilityLevel.NET_Micro:
+                    targetFrameWork.Value = k_TargetFrameworkVersion;
+                    break;
+#if !UNITY_2021_1_OR_NEWER
+                case ApiCompatibilityLevel.NET_Standard_2_0:
+                    targetFrameWork.Value = "netstandard2.0";
+                    break;
+#endif
+#if UNITY_2021_1_OR_NEWER
+                case ApiCompatibilityLevel.NET_Standard:
+                    targetFrameWork.Value = "netstandard2.1";
+                    break;
+                case ApiCompatibilityLevel.NET_Unity_4_8:
+                    targetFrameWork.Value = k_TargetFrameworkVersion;
+                    break;
+#else
+                #endif
+                default:
+                    throw new ArgumentOutOfRangeException();
             }
+            
+            ProjectHeader(assembly, responseFilesData, project);
 
-            // Append additional non-script files that should be included in project generation.
-            if (allAssetsProjectParts.TryGetValue(assembly.name, out var additionalAssetsForProject))
-                projectBuilder.Append(additionalAssetsForProject);
+            // we have source files
+            if (assembly.sourceFiles.Length != 0)
+            {
+                var itemGroup = new XElement("ItemGroup");
 
+                var seenRoot = string.Empty;
+                foreach (var file in assembly.sourceFiles)
+                {
+                    var root = m_FileIOProvider.EscapedRelativePathFor(file, ProjectDirectory);
+                    root = Directory.GetParent(root).FullName;
+                    
+                    if (root == seenRoot) continue;
+                    
+                    itemGroup.Add(new XElement("Compile", 
+                        new XAttribute("Include", $"{root}/**/*.cs"), 
+                        new XAttribute("LinkBase", $"{root}")));
+
+                    seenRoot = root;
+                }
+                
+
+                project.Add(itemGroup);
+            }
+            
+            // // Append additional non-script files that should be included in project generation.
+            if (allAssetsProjectParts.TryGetValue(assembly.name, out var additionalAssetsForProject)) {
+                var itemGroup = new XElement("ItemGroup");
+                itemGroup.Add(additionalAssetsForProject);
+                project.Add(itemGroup);
+            }
+            
             var responseRefs = responseFilesData.SelectMany(x => x.FullPathReferences.Select(r => r));
             var internalAssemblyReferences = assembly.assemblyReferences
-              .Where(i => !i.sourceFiles.Any(ShouldFileBePartOfSolution)).Select(i => i.outputPath);
+               .Where(i => !i.sourceFiles.Any(ShouldFileBePartOfSolution)).Select(i => i.outputPath);
             var allReferences =
               assembly.compiledAssemblyReferences
                 .Union(responseRefs)
-                .Union(references)
                 .Union(internalAssemblyReferences);
 
-            foreach (var reference in allReferences)
+            if (allReferences.Any())
             {
-                string fullReference = Path.IsPathRooted(reference) ? reference : Path.Combine(ProjectDirectory, reference);
-                AppendReference(fullReference, projectBuilder);
+                var refItemGroup = new XElement("ItemGroup");
+                foreach (var reference in allReferences)
+                {
+                    string fullReference = Path.IsPathRooted(reference) ? reference : Path.Combine(ProjectDirectory, reference);
+                    AppendReference(fullReference, refItemGroup);
+                }
+                
+                project.Add(refItemGroup);
             }
 
-            if (0 < assembly.assemblyReferences.Length)
+            if (assembly.assemblyReferences.Any())
             {
-                projectBuilder.Append("  </ItemGroup>").Append(k_WindowsNewline);
-                projectBuilder.Append("  <ItemGroup>").Append(k_WindowsNewline);
+                var assemblyRefItemGroup = new XElement("ItemGroup");
                 foreach (Assembly reference in assembly.assemblyReferences.Where(i => i.sourceFiles.Any(ShouldFileBePartOfSolution)))
                 {
-                    projectBuilder.Append("    <ProjectReference Include=\"").Append(reference.name).Append(GetProjectExtension()).Append("\">").Append(k_WindowsNewline);
-                    projectBuilder.Append("      <Project>{").Append(ProjectGuid(reference.name)).Append("}</Project>").Append(k_WindowsNewline);
-                    projectBuilder.Append("      <Name>").Append(reference.name).Append("</Name>").Append(k_WindowsNewline);
-                    projectBuilder.Append("    </ProjectReference>").Append(k_WindowsNewline);
+                    var packRefElement = new XElement("ProjectReference",
+                        new XAttribute("Include", $"{reference.name}{GetProjectExtension()}"));
+                    
+                    assemblyRefItemGroup.Add(packRefElement);
                 }
+                
+                project.Add(assemblyRefItemGroup);
             }
 
-            projectBuilder.Append(ProjectFooter());
-            return projectBuilder.ToString();
+            return document.ToString();
         }
 
-        static void AppendReference(string fullReference, StringBuilder projectBuilder)
+        static void AppendReference(string fullReference, XElement projectBuilder)
         {
             var escapedFullPath = SecurityElement.Escape(fullReference);
             escapedFullPath = escapedFullPath.NormalizePath();
-            projectBuilder.Append("    <Reference Include=\"").Append(Path.GetFileNameWithoutExtension(escapedFullPath)).Append("\">").Append(k_WindowsNewline);
-            projectBuilder.Append("        <HintPath>").Append(escapedFullPath).Append("</HintPath>").Append(k_WindowsNewline);
-            projectBuilder.Append("    </Reference>").Append(k_WindowsNewline);
+
+            var reference = new XElement("Reference",
+                new XAttribute("Include", Path.GetFileNameWithoutExtension(escapedFullPath)));
+
+            var hintPath = new XElement("HintPath");
+            hintPath.Value = escapedFullPath;
+            reference.Add(hintPath);
+            projectBuilder.Add(reference);
         }
 
         public string ProjectFile(Assembly assembly)
@@ -536,20 +617,68 @@ namespace VSCodeEditor
         private void ProjectHeader(
             Assembly assembly,
             List<ResponseFileData> responseFilesData,
-            StringBuilder builder
+            XElement builder
         )
         {
             var otherArguments = GetOtherArgumentsFromResponseFilesData(responseFilesData);
-            GetProjectHeaderTemplate(
-                builder,
-                ProjectGuid(assembly.name),
-                assembly.name,
-                string.Join(";", new[] { "DEBUG", "TRACE" }.Concat(assembly.defines).Concat(responseFilesData.SelectMany(x => x.Defines)).Concat(EditorUserBuildSettings.activeScriptCompilationDefines).Distinct().ToArray()),
-                GenerateLangVersion(otherArguments["langversion"], assembly),
-                assembly.compilerOptions.AllowUnsafeCode | responseFilesData.Any(x => x.Unsafe),
-                GenerateAnalyserItemGroup(RetrieveRoslynAnalyzers(assembly, otherArguments)),
-                GenerateRoslynAnalyzerRulesetPath(assembly, otherArguments)
-            );
+
+            // Language version
+            var langVersion = GenerateLangVersion(otherArguments["langversion"], assembly);
+
+            var langVersionPropertyGroup = new XElement("PropertyGroup");
+            var langElement = new XElement("LangVersion");
+            langElement.Value = langVersion;
+            langVersionPropertyGroup.Add(langElement);
+            builder.Add(langVersionPropertyGroup);
+
+            // Allow unsafe code 
+            var allowUnsafeCode = assembly.compilerOptions.AllowUnsafeCode | responseFilesData.Any(x => x.Unsafe);
+
+            var unsafeElement = new XElement("AllowUnsafeBlocks");
+            unsafeElement.Value = allowUnsafeCode.ToString().ToLower();
+            langVersionPropertyGroup.Add(unsafeElement);
+
+            var assemblyNameElement = new XElement("AssemblyName");
+            assemblyNameElement.Value = assembly.name;
+            langVersionPropertyGroup.Add(assemblyNameElement);
+
+            // we need to grab all the defines and add them to a property group 
+            var defines = string.Join(";", new[] { "DEBUG", "TRACE" }.Concat(assembly.defines).Concat(responseFilesData.SelectMany(x => x.Defines)).Concat(EditorUserBuildSettings.activeScriptCompilationDefines).Distinct().ToArray());
+            var definePropertyGroup = new XElement("PropertyGroup");
+            var definesElement = new XElement("DefineConstants");
+            definesElement.Value = defines;
+            definePropertyGroup.Add(definesElement);
+            builder.Add(definePropertyGroup);
+
+            var analyzers = RetrieveRoslynAnalyzers(assembly, otherArguments);
+            var ruleSets = GenerateRoslynAnalyzerRulesetPath(assembly, otherArguments);
+            if (analyzers.Length != 0 || ruleSets.Length != 0) 
+            {
+                var itemGroup = new XElement("ItemGroup");
+                
+                
+                if (analyzers.Length != 0) 
+                {
+                    foreach (var item in analyzers)
+                    {
+                        var attr = new XAttribute("Include", item);
+                        var analElement = new XElement("Analyzer", attr);
+                        itemGroup.Add(analElement); 
+                    }
+                }
+
+                
+                if (ruleSets.Length != 0) 
+                {
+                    foreach (var item in ruleSets)
+                    {
+                        var ruleElement = new XElement("CodeAnalysisRuleSet");
+                        ruleElement.Value = item;
+                        itemGroup.Add(ruleElement); 
+                    }
+                }
+                builder.Add(itemGroup);
+            }
         }
 
         private static string GenerateLangVersion(IEnumerable<string> langVersionList, Assembly assembly)
@@ -564,12 +693,12 @@ namespace VSCodeEditor
 #endif
         }
 
-        private static string GenerateRoslynAnalyzerRulesetPath(Assembly assembly, ILookup<string, string> otherResponseFilesData)
+        private static string[] GenerateRoslynAnalyzerRulesetPath(Assembly assembly, ILookup<string, string> otherResponseFilesData)
         {
 #if UNITY_2020_2_OR_NEWER
-            return GenerateAnalyserRuleSet(otherResponseFilesData["ruleset"].Append(assembly.compilerOptions.RoslynAnalyzerRulesetPath).Where(a => !string.IsNullOrEmpty(a)).Distinct().Select(x => MakeAbsolutePath(x).NormalizePath()).ToArray());
+            return otherResponseFilesData["ruleset"].Append(assembly.compilerOptions.RoslynAnalyzerRulesetPath).Where(a => !string.IsNullOrEmpty(a)).Distinct().Select(x => MakeAbsolutePath(x).NormalizePath()).ToArray();
 #else
-            return GenerateAnalyserRuleSet(otherResponseFilesData["ruleset"].Distinct().Select(x => MakeAbsolutePath(x).NormalizePath()).ToArray());
+            return otherResponseFilesData["ruleset"].Distinct().Select(x => MakeAbsolutePath(x).NormalizePath()).ToArray();
 #endif
         }
 

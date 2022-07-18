@@ -1,5 +1,9 @@
 # Code Editor Package for Visual Studio Code
 
+## [1.2.6] - 2022-07-18
+
+Initial support for SDK style projects. This is required since OmniSharp has dropped support for non-sdk style projects in the latest version
+
 ## [1.2.3] - 2020-10-23
 
 Remove workaround for VSCode omnisharp (as of https://github.com/OmniSharp/omnisharp-vscode/issues/4113 we no longer need to disable the referenceoutputassemblies).
