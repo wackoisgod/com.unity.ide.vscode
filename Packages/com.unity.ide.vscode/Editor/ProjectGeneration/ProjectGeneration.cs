@@ -525,22 +525,13 @@ namespace VSCodeEditor
             {
                 var itemGroup = new XElement("ItemGroup");
 
-                var seenRoot = string.Empty;
                 foreach (var file in assembly.sourceFiles)
                 {
-                    var root = m_FileIOProvider.EscapedRelativePathFor(file, ProjectDirectory);
-                    root = Directory.GetParent(root).FullName;
-                    
-                    if (root == seenRoot) continue;
-                    
                     itemGroup.Add(new XElement("Compile", 
-                        new XAttribute("Include", $"{root}/**/*.cs"), 
-                        new XAttribute("LinkBase", $"{root}")));
+                        new XAttribute("Include", $"{Path.GetFullPath(file)}")));
 
-                    seenRoot = root;
                 }
                 
-
                 project.Add(itemGroup);
             }
             
@@ -629,7 +620,6 @@ namespace VSCodeEditor
             var langElement = new XElement("LangVersion");
             langElement.Value = langVersion;
             langVersionPropertyGroup.Add(langElement);
-            builder.Add(langVersionPropertyGroup);
 
             // Allow unsafe code 
             var allowUnsafeCode = assembly.compilerOptions.AllowUnsafeCode | responseFilesData.Any(x => x.Unsafe);
@@ -674,11 +664,14 @@ namespace VSCodeEditor
                     {
                         var ruleElement = new XElement("CodeAnalysisRuleSet");
                         ruleElement.Value = item;
-                        itemGroup.Add(ruleElement); 
+                        langVersionPropertyGroup.Add(ruleElement); 
                     }
                 }
                 builder.Add(itemGroup);
             }
+            
+            builder.Add(langVersionPropertyGroup);
+
         }
 
         private static string GenerateLangVersion(IEnumerable<string> langVersionList, Assembly assembly)
