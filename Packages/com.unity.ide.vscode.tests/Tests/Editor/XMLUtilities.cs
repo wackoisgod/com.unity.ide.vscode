@@ -9,28 +9,28 @@ namespace VSCodeEditor.Tests
     {
         public static void AssertCompileItemsMatchExactly(XmlDocument projectXml, IEnumerable<string> expectedCompileItems)
         {
-            var compileItems = projectXml.SelectAttributeValues("/msb:Project/msb:ItemGroup/msb:Compile/@Include", GetModifiedXmlNamespaceManager(projectXml)).ToArray();
-            CollectionAssert.AreEquivalent(RelativeAssetPathsFor(expectedCompileItems), compileItems);
+            var compileItems = projectXml.SelectAttributeValues("/Project/ItemGroup/Compile/@Include", GetModifiedXmlNamespaceManager(projectXml)).ToArray();
+            CollectionAssert.AreEquivalent(expectedCompileItems, compileItems);
         }
         
         public static void AssertAnalyzerItemsMatchExactly(XmlDocument projectXml, IEnumerable<string> expectedAnalyzers)
         {
             CollectionAssert.AreEquivalent(
                 expected: RelativeAssetPathsFor(expectedAnalyzers), 
-                actual:projectXml.SelectAttributeValues("/msb:Project/msb:ItemGroup/msb:Analyzer/@Include", GetModifiedXmlNamespaceManager(projectXml)).ToArray());
+                actual:projectXml.SelectAttributeValues("/Project/ItemGroup/Analyzer/@Include", GetModifiedXmlNamespaceManager(projectXml)).ToArray());
         }
         
         public static void AssertAnalyzerRuleSetsMatchExactly(XmlDocument projectXml, string expectedRuleSetFile)
         {
             CollectionAssert.Contains(
-                projectXml.SelectInnerText("/msb:Project/msb:PropertyGroup/msb:CodeAnalysisRuleSet",
+                projectXml.SelectInnerText("/Project/PropertyGroup/CodeAnalysisRuleSet",
                     GetModifiedXmlNamespaceManager(projectXml)).ToArray(), expectedRuleSetFile);
         }
 
         public static void AssertNonCompileItemsMatchExactly(XmlDocument projectXml, IEnumerable<string> expectedNoncompileItems)
         {
-            var nonCompileItems = projectXml.SelectAttributeValues("/msb:Project/msb:ItemGroup/msb:None/@Include", GetModifiedXmlNamespaceManager(projectXml)).ToArray();
-            CollectionAssert.AreEquivalent(RelativeAssetPathsFor(expectedNoncompileItems), nonCompileItems);
+            var nonCompileItems = projectXml.SelectAttributeValues("/Project/ItemGroup/None/@Include", GetModifiedXmlNamespaceManager(projectXml)).ToArray();
+            CollectionAssert.AreEquivalent(expectedNoncompileItems, nonCompileItems);
         }
 
         static XmlNamespaceManager GetModifiedXmlNamespaceManager(XmlDocument projectXml)
@@ -54,7 +54,7 @@ namespace VSCodeEditor.Tests
 
         static IEnumerable<string> SelectInnerText(this XmlDocument xmlDocument, string xpathQuery, XmlNamespaceManager xmlNamespaceManager)
         {
-            var result = xmlDocument.SelectNodes(xpathQuery, xmlNamespaceManager);
+            var result = xmlDocument.SelectNodes(xpathQuery);
             foreach (XmlElement node in result)
             {
                 yield return node.InnerText;

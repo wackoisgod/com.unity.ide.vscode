@@ -7,6 +7,7 @@ using System.Xml;
 using NUnit.Framework;
 using UnityEditor.Compilation;
 using UnityEditor;
+using UnityEngine;
 
 namespace VSCodeEditor.Tests
 {
@@ -36,89 +37,43 @@ namespace VSCodeEditor.Tests
                 synchronizer.Sync();
 
                 var csprojContent = m_Builder.ReadProjectFile(m_Builder.Assembly);
+                Debug.Log(csprojContent);
                 var defines = string.Join(";", new[] { "DEBUG", "TRACE" }.Concat(EditorUserBuildSettings.activeScriptCompilationDefines).Concat(m_Builder.Assembly.defines).Distinct().ToArray());
+
+                var group = BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget);
+                var netSettings = PlayerSettings.GetApiCompatibilityLevel(group);
+
+
+                var targetFrameWork = ProjectGeneration.GetTargetFrameworkVersion(netSettings);
+
                 var content = new[]
                 {
-                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
-                    "<Project ToolsVersion=\"4.0\" DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">",
+                    "<Project Sdk=\"Microsoft.NET.Sdk\">",
+                    "  <PropertyGroup>",
+                    $"    <TargetFramework>{targetFrameWork}</TargetFramework>",
+                    $"    <DisableImplicitNamespaceImports>true</DisableImplicitNamespaceImports>",
+                    "  </PropertyGroup>",
+                    "  <PropertyGroup>",
+                    "    <DefaultItemExcludes>$(DefaultItemExcludes);Library/;**/*.*</DefaultItemExcludes>",
+                    "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>",
+                    "  </PropertyGroup>",
+                    "  <PropertyGroup>",
+                    $"    <DefineConstants>{defines}</DefineConstants>",
+                    "  </PropertyGroup>",
                     "  <PropertyGroup>",
                     $"    <LangVersion>{Helper.GetLangVersion()}</LangVersion>",
-                    "  </PropertyGroup>",
-                    "  <PropertyGroup>",
-                    "    <Configuration Condition=\" '$(Configuration)' == '' \">Debug</Configuration>",
-                    "    <Platform Condition=\" '$(Platform)' == '' \">AnyCPU</Platform>",
-                    "    <ProductVersion>10.0.20506</ProductVersion>",
-                    "    <SchemaVersion>2.0</SchemaVersion>",
-                    "    <RootNamespace></RootNamespace>",
-                    $"    <ProjectGuid>{{{projectGuid}}}</ProjectGuid>",
-                    "    <OutputType>Library</OutputType>",
-                    "    <AppDesignerFolder>Properties</AppDesignerFolder>",
-                    $"    <AssemblyName>{m_Builder.Assembly.name}</AssemblyName>",
-                    "    <TargetFrameworkVersion>v4.7.1</TargetFrameworkVersion>",
-                    "    <FileAlignment>512</FileAlignment>",
-                    "    <BaseDirectory>.</BaseDirectory>",
-                    "  </PropertyGroup>",
-                    "  <PropertyGroup Condition=\" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' \">",
-                    "    <DebugSymbols>true</DebugSymbols>",
-                    "    <DebugType>full</DebugType>",
-                    "    <Optimize>false</Optimize>",
-                    "    <OutputPath>Temp\\bin\\Debug\\</OutputPath>",
-                    $"    <DefineConstants>{defines}</DefineConstants>",
-                    "    <ErrorReport>prompt</ErrorReport>",
-                    "    <WarningLevel>4</WarningLevel>",
-                    "    <NoWarn>0169</NoWarn>",
                     "    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>",
-                    "  </PropertyGroup>",
-                    "  <PropertyGroup>",
-                    "    <NoConfig>true</NoConfig>",
+                    "    <WarningLevel>4</WarningLevel>",
                     "    <NoStdLib>true</NoStdLib>",
-                    "    <AddAdditionalExplicitAssemblyReferences>false</AddAdditionalExplicitAssemblyReferences>",
-                    "    <ImplicitlyExpandNETStandardFacades>false</ImplicitlyExpandNETStandardFacades>",
-                    "    <ImplicitlyExpandDesignTimeFacades>false</ImplicitlyExpandDesignTimeFacades>",
+                    "    <AssemblyName>Test</AssemblyName>",
                     "  </PropertyGroup>",
                     "  <ItemGroup>",
-                    "     <Compile Include=\"test.cs\" />",
+                    "    <Compile Include=\"test.cs\" />",
                     "  </ItemGroup>",
-                    "  <Import Project=\"$(MSBuildToolsPath)\\Microsoft.CSharp.targets\" />",
-                    "  <!-- To modify your build process, add your task inside one of the targets below and uncomment it.",
-                    "       Other similar extension points exist, see Microsoft.Common.targets.",
-                    "  <Target Name=\"BeforeBuild\">",
-                    "  </Target>",
-                    "  <Target Name=\"AfterBuild\">",
-                    "  </Target>",
-                    "  -->",
-                    "</Project>",
-                    ""
+                    "</Project>"
                 };
 
-                StringAssert.AreEqualIgnoringCase(string.Join("\r\n", content), csprojContent);
-            }
-        }
-
-        class GUID : ProjectGenerationTestBase
-        {
-            [Test]
-            public void ProjectReference_MatchAssemblyGUID()
-            {
-                string[] files = { "test.cs" };
-                var assemblyB = new Assembly("Test", "Temp/Test.dll", files, new string[0], new Assembly[0], new string[0], AssemblyFlags.None);
-                var assemblyA = new Assembly("Test2", "some/path/file.dll", files, new string[0], new[] { assemblyB }, new[] { "Library.ScriptAssemblies.Test.dll" }, AssemblyFlags.None);
-                var synchronizer = m_Builder.WithAssemblies(new[] { assemblyA, assemblyB }).Build();
-
-                synchronizer.Sync();
-
-                var assemblyACSproject = SynchronizerBuilder.ProjectFilePath(assemblyA);
-                var assemblyBCSproject = SynchronizerBuilder.ProjectFilePath(assemblyB);
-
-                Assert.True(m_Builder.FileExists(assemblyACSproject));
-                Assert.True(m_Builder.FileExists(assemblyBCSproject));
-
-                XmlDocument scriptProject = XMLUtilities.FromText(m_Builder.ReadFile(assemblyACSproject));
-                XmlDocument scriptPluginProject = XMLUtilities.FromText(m_Builder.ReadFile(assemblyBCSproject));
-
-                var a = XMLUtilities.GetInnerText(scriptPluginProject, "/msb:Project/msb:PropertyGroup/msb:ProjectGuid");
-                var b = XMLUtilities.GetInnerText(scriptProject, "/msb:Project/msb:ItemGroup/msb:ProjectReference/msb:Project");
-                Assert.AreEqual(a, b);
+                StringAssert.AreEqualIgnoringCase(string.Join("\n", content), csprojContent);
             }
         }
 
@@ -579,7 +534,7 @@ namespace VSCodeEditor.Tests
                 synchronizer.Sync();
 
                 var csprojFileContents = m_Builder.ReadProjectFile(m_Builder.Assembly);
-                Assert.That(csprojFileContents, Does.Match($@"<ProjectReference Include=""{assembly.name}\.csproj"">[\S\s]*?</ProjectReference>"));
+                Assert.That(csprojFileContents, Does.Match($@"<ProjectReference Include=""{assembly.name}\.csproj"" />"));
             }
 
             [Test]
@@ -612,8 +567,8 @@ namespace VSCodeEditor.Tests
                 synchronizer.Sync();
 
                 var csprojFileContents = m_Builder.ReadProjectFile(m_Builder.Assembly);
-                Assert.That(csprojFileContents, Does.Match($@"<ProjectReference Include=""{assemblyReferences[0].name}\.csproj"">[\S\s]*?</ProjectReference>"));
-                Assert.That(csprojFileContents, Does.Match($@"<ProjectReference Include=""{assemblyReferences[1].name}\.csproj"">[\S\s]*?</ProjectReference>"));
+                Assert.That(csprojFileContents, Does.Match($@"<ProjectReference Include=""{assemblyReferences[0].name}\.csproj"" />"));
+                Assert.That(csprojFileContents, Does.Match($@"<ProjectReference Include=""{assemblyReferences[1].name}\.csproj"" />"));
             }
 
             [Test]
